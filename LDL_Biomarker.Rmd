@@ -1,0 +1,497 @@
+---
+title: "BMI 714 Final Project Rmd"
+author: "Rohan Krishnamurthi"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+# Initial Setup
+
+```{r}
+
+# Load package(s)
+library(tidymodels)
+library(tidyverse)
+library(here)
+library(recipes)
+library(xgboost)
+library(doMC)
+
+# handle common conflicts
+tidymodels_prefer()
+
+# Set working directory
+setwd("/Users/rohankrishnamurthi/Downloads/BMI 714/Final Project/final-project-rohan")
+
+# Read in data tables
+nhanes <- read_csv(("BMI714_NHANES2020_Data.csv")) |> 
+  janitor::clean_names() 
+
+nhanes_dictionary <- read_csv(("BMI714_NHANES_VariableDictionary.csv")) |> 
+  janitor::clean_names() 
+
+```
+
+# Data Preparation
+```{r}
+
+# AFTER SPLIT: do preprocessing of the training data, apply those same transformations to testing data
+
+# Outcome variable, LDL: P_TRIGLY_LBDLDNSI
+
+# Main Predictors (lab measurements)
+# 1.	Triglycerides / VLDL: P_BIOPRO_LBXSTR
+# 2.	Glucose: P_BIOPRO_LBXSGL
+# 3.	Hemoglobin: P_CBC_LBXHGB
+# 4.	Insulin: P_INS_LBXIN
+# 5.	Liver func, Gamma Glutamyl Transferase (GGT): P_BIOPRO_LBXSGTSI
+# 6.	Liver function, Alkaline Phosphatase (ALP): P_BIOPRO_LBXSAPSI
+# 7.	Kidney function, creatinine, urine: P_ALB_CR_URXUCR
+# 8.	C-reactive protein: P_HSCRP_LBXHSCRP
+# 9.	White blood cell count (1000 cells/uL): P_CBC_LBXWBCSI
+
+# Assess missingness
+sum(is.na(nhanes$p_trigly_lbdldnsi))/nrow(nhanes) # 0.7
+sum(is.na(nhanes$p_tchol_lbxtc))/nrow(nhanes) # 0.30
+sum(is.na(nhanes$p_trigly_lbxtr))/nrow(nhanes) # 0.70
+sum(is.na(nhanes$p_biopro_lbxstr))/nrow(nhanes) # 0.3911954
+sum(is.na(nhanes$p_biopro_lbxsgl))/nrow(nhanes) #0.39
+sum(is.na(nhanes$p_cbc_lbxhgb))/nrow(nhanes) #0.219
+sum(is.na(nhanes$p_ins_lbxin))/nrow(nhanes) #0.70
+sum(is.na(nhanes$p_biopro_lbxsatsi))/nrow(nhanes) #0.39
+sum(is.na(nhanes$p_biopro_lbxsassi))/nrow(nhanes)
+sum(is.na(nhanes$p_biopro_lbxsgtsi))/nrow(nhanes)
+sum(is.na(nhanes$p_biopro_lbxsapsi))/nrow(nhanes) #0.39
+sum(is.na(nhanes$p_alb_cr_urxucr))/nrow(nhanes) #0.196
+sum(is.na(nhanes$p_biopro_lbxscr))/nrow(nhanes) #0.39
+sum(is.na(nhanes$p_hscrp_lbxhscrp))/nrow(nhanes) #0.25
+sum(is.na(nhanes$p_cbc_lbxwbcsi))/nrow(nhanes) # 0.2187661
+sum(is.na(nhanes$p_demo_ridreth3))/nrow(nhanes)
+
+
+
+# Select variables of interest (including potential confounders)
+nhanes_filtered <- nhanes |> select(
+  # seqn, #id
+  p_trigly_lbdldnsi, #LDL, NIH eqn
+  p_biopro_lbxstr, #Triglycerides
+  p_biopro_lbxsgl, # Glucose
+  p_cbc_lbxhgb, # Hemoglobin
+  p_ins_lbxin, # Insulin, high missingness
+  p_biopro_lbxsgtsi, # GGT
+  p_biopro_lbxsapsi, # Alkaline Phosphatase
+  p_alb_cr_urxucr, # Creatinine
+  p_hscrp_lbxhscrp, # C-reactive protein
+  p_cbc_lbxwbcsi, # White blood cell count
+  p_demo_ridreth3, # Confounders for later
+  p_demo_ridageyr, 
+  p_demo_riagendr
+)
+
+# Only select complete rows with no missing values
+nhanes_filtered_complete <- nhanes_filtered[complete.cases(nhanes_filtered), ]
+
+# Filter even further
+nhanes_filtered_subset <- nhanes_filtered_complete |> 
+  select(
+  # seqn,
+  p_trigly_lbdldnsi, # LDL, NIH eqn
+  p_biopro_lbxstr, #Triglycerides
+  p_biopro_lbxsgl, # Glucose
+  p_cbc_lbxhgb, # Hemoglobin
+  p_ins_lbxin, # Insulin, high missingness
+  p_biopro_lbxsgtsi, # GGT
+  p_biopro_lbxsapsi, # Alkaline Phosphatase
+  p_alb_cr_urxucr, # Creatinine
+  p_hscrp_lbxhscrp, # C-reactive protein
+  p_cbc_lbxwbcsi, # White blood cell count
+  )
+
+# Save data frames
+save(nhanes_filtered_complete, file = ("data-splitting/nhanes_filtered_complete.rda"))
+save(nhanes_filtered_subset, file = ("data-splitting/nhanes_filtered_subset.rda"))
+```
+
+
+# Exploratory Data Analysis
+```{r}
+
+# Make Plots
+
+
+nhanes_filtered_subset %>%
+  pivot_longer(cols = -p_trigly_lbdldnsi, names_to = "predictor", values_to = "value") %>%
+  ggplot(aes(x = value, y = p_trigly_lbdldnsi)) +
+  geom_point(alpha = 0.6) +
+  facet_wrap(~ predictor, scales = "free_x") +
+  labs(x = "Predictor value", y = "p_trigly_lbdldnsi", title = "LDL vs. Predictors") +
+  theme_minimal()
+
+# Check collinearity / correlation
+
+cor_mat <- cor(nhanes_filtered_subset, use = "complete.obs")
+print(cor_mat)
+
+df_scaled <- scale(nhanes_filtered_subset |> select(-p_trigly_lbdldnsi))
+kappa(df_scaled)
+
+
+# Boxplot shows there is not great overlap in predictors' ranges; scaling is necessary
+boxplot(nhanes_filtered_subset |> select(-p_trigly_lbdldnsi), main = "Boxplot of Predictors")
+
+# OPTIONAL: SPLIT THE DATA
+# Filtered Data
+## Set seed for random split
+set.seed(714)
+nhanes_split <- nhanes_filtered_subset |> 
+  initial_split(prop = 0.8, strata = p_trigly_lbdldnsi)
+
+nhanes_train <- nhanes_split |> training()
+nhanes_test <- nhanes_split |> testing()
+
+
+
+##Use V-fold cross-validation (v = 5 folds, 3 repeats)
+set.seed(714)
+nhanes_folds <- vfold_cv(nhanes_train, v = 5, repeats = 3,
+                      strata = p_trigly_lbdldnsi)
+
+
+## Write out folds
+save(nhanes_train, file = ("data-splitting/nhanes_1_train.rda"))
+save(nhanes_test, file = ("data-splitting/nhanes_1_test.rda"))
+save(nhanes_folds, file = ("data-splitting/nhanes_1_folds.rda"))
+
+
+# SCALE/TRANSFORM DATA
+# Scale Predictors
+# Code categorical variables: not applicable
+# Transform data
+
+
+# Recipe scaling method
+rec <- recipe(p_trigly_lbdldnsi ~ ., data = nhanes_train) %>%
+  step_dummy(all_nominal_predictors(), one_hot = FALSE) %>%
+  step_normalize(all_numeric_predictors())
+
+rec_prep <- prep(rec, training = nhanes_train)
+nhanes_train_scaled <- bake(rec_prep, new_data = nhanes_train)
+nhanes_test_scaled  <- bake(rec_prep, new_data = nhanes_test)
+
+# Other scaling method
+X <- nhanes_train |> select(-p_trigly_lbdldnsi)
+
+mu <- sapply(X, mean, na.rm = TRUE)
+sd <- sapply(X, sd, na.rm = TRUE)
+
+X_scaled <- scale(X, center = mu, scale = sd)
+
+nhanes_train_scaled <- cbind(
+  p_trigly_lbdldnsi = nhanes_train$p_trigly_lbdldnsi,
+  as.data.frame(X_scaled)
+)
+
+
+```
+
+
+# Select and Run Regression Model
+
+```{r}
+
+# MODEL: Boosted Tree, or Random Forest
+# Variable Selection: not necessary
+# Regularization: not necessary
+# Recipe:
+nhanes_recipe <- recipe(p_trigly_lbdldnsi ~ .,
+                        data = nhanes_train) |> 
+  step_normalize(all_numeric_predictors())
+
+save(nhanes_recipe, file = ("recipes/nhanes_recipe.rda"))
+
+# Run model 
+# parallel processing to speed process up
+num_cores <- parallel::detectCores(logical = TRUE)
+registerDoMC(cores = num_cores)
+
+# model specifications
+bt_spec <- boost_tree(
+  min_n = tune(),
+  mtry = tune(),
+  learn_rate = tune()
+) |> 
+  set_mode("regression") |> 
+  set_engine("xgboost")
+
+# define workflows ----
+bt_wflow <- workflow() |> 
+  add_model(bt_spec) |> 
+  add_recipe(nhanes_recipe)
+
+# hyperparameter tuning values ----
+# Check ranges for hyperparameters
+hardhat::extract_parameter_set_dials(bt_spec)
+
+# Change hyperparameter ranges
+bt_params <- hardhat::extract_parameter_set_dials(bt_spec) |> 
+  update(mtry = mtry(c(1,10)), learn_rate = learn_rate(c(-5, -0.2)))
+
+# Build tuning grid
+bt_grid <- grid_regular(bt_params, levels = 5)
+
+# fit workflows/models ----
+set.seed(714)
+bt_tuned <- bt_wflow |> 
+  tune_grid(nhanes_folds, grid = bt_grid, control = control_grid(save_workflow = TRUE))
+
+# Save results
+save(bt_tuned, file = ("results/bt_tuned.rda"))
+
+
+
+
+
+```
+
+# Evaluate model fit
+
+```{r}
+
+# boosted tree model
+bt_tuned |> collect_metrics()
+bt_tuned |> autoplot(metric = "rmse")
+
+
+# Report key statistics
+# Select best parameters
+bt_metrics <- collect_metrics(bt_tuned) |> 
+  filter(.metric == "rmse") |> 
+  mutate(.config = "boosted tree") |> 
+  rename(mean_rmse = mean)
+
+best_bt_metrics <- bt_metrics |>
+  filter(mean_rmse == min(mean_rmse))
+
+best_bt_metrics
+
+# Finalize workflow 
+best_bt_wflow <- bt_tuned |> 
+  extract_workflow(bt_tuned) |> 
+  finalize_workflow(select_best(bt_tuned, metric = "rmse"))
+
+# train final model
+# set seed
+set.seed(714)
+bt_fit <- fit(best_bt_wflow, nhanes_train)
+
+# Train Best Model on Entire dataset
+# Finalize workflow 
+best_bt_wflow <- bt_tuned |> 
+  extract_workflow(bt_tuned) |> 
+  finalize_workflow(select_best(bt_tuned, metric = "rmse"))
+
+# train final model
+# set seed
+set.seed(714)
+bt_fit <- fit(best_bt_wflow, nhanes_train)
+bt_fit
+
+
+# Finalize Predictions
+final_predictions <- nhanes_test %>% 
+  select(p_trigly_lbdldnsi) %>% 
+  bind_cols(predict(bt_fit, nhanes_test)) |> 
+  mutate(difference = abs(p_trigly_lbdldnsi - .pred))
+
+  
+# Assess model performance
+get_metrics <- metric_set(rmse, rsq, mae)
+pred_metrics <- as.data.frame(get_metrics(final_predictions, truth = p_trigly_lbdldnsi, estimate = .pred))
+pred_metrics
+
+
+# Plot Results
+prediction_plot <- final_predictions |> ggplot(aes(x = p_trigly_lbdldnsi, y = .pred)) +
+  geom_abline(color = "blue") + 
+  geom_point(alpha = 0.5) + 
+  ylim(0,5) +
+  labs(y = "Predicted p_trigly_lbdldnsi", x = "Actual p_trigly_lbdldnsi",
+       title = "Original Boosted Tree Model Predictions")
+
+prediction_plot
+mean(nhanes_filtered_complete$p_trigly_lbdldnsi)
+
+
+```
+
+
+
+# Alternative Model
+
+```{r}
+# Dataset including Confounder variables:
+nhanes_filtered_complete <- nhanes_filtered_complete |> 
+  mutate(p_demo_ridreth3 = as.factor(p_demo_ridreth3),
+         p_demo_riagendr = as.factor(p_demo_riagendr))
+
+# SPLIT THE DATA
+set.seed(715)
+nhanes_split_2 <- nhanes_filtered_complete |> 
+  initial_split(prop = 0.8, strata = p_trigly_lbdldnsi)
+
+nhanes_train_2 <- nhanes_split_2 |> training()
+nhanes_test_2 <- nhanes_split_2 |> testing()
+
+# Use V-fold cross-validation (v = 5 folds, 3 repeats)
+set.seed(714)
+nhanes_folds_2 <- vfold_cv(nhanes_train_2, v = 5, repeats = 3, strata = p_trigly_lbdldnsi)
+
+# Recipe
+nhanes_recipe_2 <- recipe(p_trigly_lbdldnsi ~ .,
+                        data = nhanes_train_2) |> 
+  step_dummy(all_nominal_predictors(), one_hot = FALSE) |> 
+  step_normalize(all_numeric_predictors())
+
+
+# Run model 
+# parallel processing to speed process up
+num_cores <- parallel::detectCores(logical = TRUE)
+registerDoMC(cores = num_cores)
+
+# model specifications
+bt_spec_2 <- boost_tree(
+  min_n = tune(),
+  mtry = tune(),
+  learn_rate = tune()
+) |> 
+  set_mode("regression") |> 
+  set_engine("xgboost")
+
+# define workflows ----
+bt_wflow_2 <- workflow() |> 
+  add_model(bt_spec_2) |> 
+  add_recipe(nhanes_recipe_2)
+
+# Change hyperparameter ranges
+bt_params_2 <- hardhat::extract_parameter_set_dials(bt_spec_2) |> 
+  update(mtry = mtry(c(1,10)), learn_rate = learn_rate(c(-5, -0.2)))
+
+# Build tuning grid
+bt_grid_2 <- grid_regular(bt_params_2, levels = 5)
+
+# fit workflows/models ----
+set.seed(714)
+bt_tuned_2 <- bt_wflow |> 
+  tune_grid(nhanes_folds_2, grid = bt_grid_2, control = control_grid(save_workflow = TRUE))
+
+# Save results
+save(bt_tuned_2, file = ("results/bt_tuned_2.rda"))
+
+
+# Evaluate Model Fit
+
+# boosted tree model
+bt_tuned_2 |> collect_metrics()
+bt_tuned_2 |> autoplot(metric = "rmse")
+
+
+# Report key statistics
+# Select best parameters
+bt_metrics_2 <- collect_metrics(bt_tuned_2) |> 
+  filter(.metric == "rmse") |> 
+  mutate(.config = "boosted tree") |> 
+  rename(mean_rmse = mean)
+
+best_bt_metrics_2 <- bt_metrics_2 |>
+  filter(mean_rmse == min(mean_rmse))
+
+best_bt_metrics_2
+
+
+
+
+```
+
+
+# Follow-up Analysis: Accuracy of Prediction in Held-Out Data
+
+```{r}
+# ORIGINAL MODEL
+# Train Best Model on Entire dataset
+# Finalize workflow 
+best_bt_wflow <- bt_tuned |> 
+  extract_workflow(bt_tuned) |> 
+  finalize_workflow(select_best(bt_tuned, metric = "rmse"))
+
+# train final model
+# set seed
+set.seed(714)
+bt_fit <- fit(best_bt_wflow, nhanes_train)
+bt_fit
+
+
+# Finalize Predictions
+final_predictions <- nhanes_test %>% 
+  select(p_trigly_lbdldnsi) %>% 
+  bind_cols(predict(bt_fit, nhanes_test)) |> 
+  mutate(difference = abs(p_trigly_lbdldnsi - .pred))
+
+  
+# Assess model performance
+get_metrics <- metric_set(rmse, rsq, mae)
+pred_metrics <- as.data.frame(get_metrics(final_predictions, truth = p_trigly_lbdldnsi, estimate = .pred))
+pred_metrics
+
+
+# Plot Results
+prediction_plot <- final_predictions |> ggplot(aes(x = p_trigly_lbdldnsi, y = .pred)) +
+  geom_abline(color = "blue") + 
+  geom_point(alpha = 0.5) + 
+  ylim(0,5) +
+  labs(y = "Predicted p_trigly_lbdldnsi", x = "Actual p_trigly_lbdldnsi")
+
+prediction_plot
+
+# NEW MODEL
+# Finalize workflow 
+best_bt_wflow_2 <- bt_tuned_2 |> 
+  extract_workflow(bt_tuned_2) |> 
+  finalize_workflow(select_best(bt_tuned_2, metric = "rmse"))
+
+# train final model
+# set seed
+set.seed(714)
+bt_fit_2 <- fit(best_bt_wflow_2, nhanes_train_2)
+
+# Finalize Predictions
+final_predictions_2 <- nhanes_test_2 |> 
+  select(p_trigly_lbdldnsi) |> 
+  bind_cols(predict(bt_fit_2, nhanes_test_2)) |> 
+  mutate(difference = abs(p_trigly_lbdldnsi - .pred))
+
+# Assess model performance
+get_metrics_2 <- metric_set(rmse, rsq, mae)
+pred_metrics_2 <- as.data.frame(get_metrics_2(final_predictions_2, truth = p_trigly_lbdldnsi, estimate = .pred))
+pred_metrics_2
+
+
+# WHICH MODEL PERFORMS BETTER
+# Hypothesis test comparing the two
+vec1 <- final_predictions$difference
+vec2 <- final_predictions_2$difference
+
+t.test(x = vec1, y = vec2, alternative = "greater")
+# p = 0.4449, inconclusive if adding confounders made model stronger
+
+# Fail to reject null
+
+
+```
+
+
+
+
+
+
