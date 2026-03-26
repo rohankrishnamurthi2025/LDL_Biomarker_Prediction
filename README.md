@@ -23,6 +23,40 @@ Whereas other regression models assume that variables have linear relationships,
 
 In the model development, the training data was split into folds for V-fold cross validation. This process reinforces the model’s performance by allowing it to iteratively train on different folds of the data. A simple recipe was made to relate the outcome to the predictors and normalize the predictors. The hyperparameters mtry, min_n, and learn_rate were fine-tuned in order to optimize the model’s performance. For context, mtry represents the number of predictors sampled at each split, min_n represents the minimum number of data points in a node for it to be split, and learn_rate represents the rate at which the algorithm adapts from iterations. These parameters collectively affect the model’s complexity and stability, so fine-tuning them can have a great impact on the model’s performance. A workflow was made with the simple recipe and model specifications, which was then fitted on the training data to make the model. 
 
+## Results
+The performance metrics of the model with each combination of hyperparameters was extracted. The combination with the lowest average RMSE across folds included an mtry of 1, a min_n of 30, and a learn_rate of 0.631. The model was retrained with that combination of hyperparameters only, and the predictions of the LDL levels using the testing data were collected. The comparison of the predicted and actual LDL values had an RMSE of 0.8598 mg. Given that the mean LDL value in the dataset is 2.77 mg and the standard deviation of 0.93 mg, the boosted tree model had fairly strong predictions.
+
+<img width="226" height="142" alt="image" src="https://github.com/user-attachments/assets/c243ef97-16ae-4277-8d0a-55597ab25df2" />
+
+Figure 2a. Original boosted tree model’s LDL predictions.
+
+<img width="225" height="139" alt="image" src="https://github.com/user-attachments/assets/1d086c97-4c0e-4135-952f-57772fc9833d" />
+
+Figure 2b. Secondary boosted tree model’s LDL predictions.
+
+
+## Secondary Model:
+In the secondary model, it was chosen to incorporate three confounder variables
+in the analysis: age, gender, and race. The impact of these variables on LDL levels and the predictors themselves remains unclear in research, so it is important to understand their confounding effect. The model development process was repeated with these three predictors added. Given that gender and race are categorical variables, they were converted into dummy variables in the recipe process. The best performing set of hyperparameters involved an mtry of 1, a min_n of 40, and a learn_rate of 0.631, very similar to the first model. After using the extended model to make predictions on the testing data, the resulting predictions had an RMSE of 0.859 mg, similar to the first model. The results suggest that the addition of confounders had little to no impact on model performance.
+
+## Follow-Up Analysis:
+A two-sided student’s t-test was performed to see if the incorporation of the three
+confounder variables had a positive impact on the boosted tree model’s performance, or more specifically, the error in its predictions. The differences in the predicted and actual LDL values for each model were compared in the t-test. The null hypothesis was that the incorporation of the confounders has no effect on lowering the prediction errors, while the alternative hypothesis was that the incorporation of the confounders significantly lowers the prediction errors. A significance threshold of 0.05 was used. The t-test output a p-value of 0.449, indicating that the results were not significant and the null hypothesis cannot be rejected.
+
+## References
+- High Cholesterol and Kidney Disease. National Kidney Federation. (n.d.). https://www.kidney.org.uk/blogs/high-cholesterol-and-kidney-disease
+- Kurniawan L. B. (2024). Triglyceride-Glucose Index As A Biomarker Of Insulin
+Resistance, Diabetes Mellitus, Metabolic Syndrome, And Cardiovascular Disease: A
+Review. EJIFCC, 35(1), 44–51.
+- Ozturk E. (2021). The Relationship Between Hematological Malignancy and Lipid
+Profile. Medeniyet medical journal, 36(2), 146 151.
+https://doi.org/10.5222/MMJ.2021.91145
+- U.S. National Library of Medicine. (n.d.). LDL: The “bad” cholesterol. MedlinePlus. https://medlineplus.gov/ldlthebadcholesterol.html
+- What’s So Bad about LDL? Cleveland Clinic. (2025, December 9). https://my.clevelandclinic.org/health/articles/24391-ldl-cholesterol
+
+
+
+
 
 
 This project was conducted as a part of BMI 714: Advanced Coding and Statistics for Biomedical Informatics at Harvard Medical School.
